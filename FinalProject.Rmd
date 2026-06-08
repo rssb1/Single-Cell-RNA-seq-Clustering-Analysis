@@ -1,0 +1,245 @@
+---
+title: "Exploring How Principal Component Selection Influences Clustering Results in scRNA-seq Data"
+author: "Ramani Sree Sampada Bommuluri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Introduction
+
+This project investigates how changing the number of principal components (PCs) affects clustering results in single-cell RNA sequencing data using the Seurat package.
+
+Single-cell RNA sequencing (scRNA-seq) measures gene expression across thousands of individual cells. Because each cell contains expression values for thousands of genes, the data are high-dimensional. Principal component analysis (PCA) is used to reduce this complexity before clustering cells into groups.
+
+The dataset used in this project comes from 10x Genomics:
+https://www.10xgenomics.com/datasets/10k_5p_Human_diseased_PBMC_ALL_Fix
+
+This dataset contains approximately 10,000 peripheral blood mononuclear cells (PBMCs) from a human donor. These include immune cell types such as T cells, B cells, monocytes, and natural killer (NK) cells. The dataset provides gene expression counts for thousands of genes across individual cells.
+
+Understanding how parameter choices such as the number of principal components affect clustering is important for ensuring that biological conclusions are accurate and not artifacts of analysis settings.
+
+The goal of this project is to answer the following question:
+
+How does changing the number of principal components affect clustering results?
+
+To answer this question, the analysis will:
+
+- Process single-cell RNA sequencing data using Seurat
+- Perform clustering using 5, 12, and 25 principal components
+- Compare how cluster structure changes across these settings
+- Evaluate whether increasing PCs improves clusterig or introduces noise
+
+***
+
+# Results
+
+Download the data:
+This code downloads the PBMC dataset and extracts it for use in the analysis.
+
+```{r}
+u =  "https://cf.10xgenomics.com/samples/cell-vdj/8.0.1/10k_5p_Human_diseased_PBMC_ALL_Fix/10k_5p_Human_diseased_PBMC_ALL_Fix_count_filtered_feature_bc_matrix.tar.gz"
+should_exist = file.path("data_Project","filtered_feature_bc_matrix")
+downloaded = "10k_5p_Human_diseased_PBMC_ALL_Fix_count_filtered_feature_bc_matrix.tar.gz"
+if (!file.exists(should_exist)) {
+  if (!file.exists(downloaded)) {
+    download.file(u,downloaded,mode="wb")
+  }
+  untar(downloaded, exdir = "data_Project")
+}
+```
+
+
+## Make a Seurat object
+
+Load the Seurat library:
+
+```{r message=FALSE, warning=FALSE}
+library(Seurat)
+library(ggplot2)
+```
+
+Read the data into memory, creating a Seurat object:
+
+```{r}
+pbmc.data <- Read10X(data.dir = file.path("data_Project","filtered_feature_bc_matrix"))
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc10k", min.cells = 3, min.features = 200)
+```
+
+The Seurat object organizes gene expression data and metadata for downstream analysis.
+
+
+## Quality control Filtering 
+
+This code calculates mitochondrial gene percentages and filters out low-quality cells.
+
+```{r message=FALSE, warning=FALSE}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern ="^MT-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+cells_before <- ncol(pbmc)
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & percent.mt < 15)
+cells_after <- ncol(pbmc)
+
+```
+The violin plot shows the distribution of gene counts, RNA counts, and mitochondrial percentages. Cells with extreme values are visible as outliers.
+
+
+```{r}
+low_quality_cells = cells_before-cells_after
+cells_left_after_filtering = cells_after
+```
+
+The quality-control filtering step removed `r low_quality_cells`.
+The number of cells left after filtering was: `r cells_left_after_filtering`.
+
+
+## Normalize the data 
+This step normalizes gene expression values across cells.
+
+```{r message=FALSE, warning=FALSE}
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor=10000)
+```
+Normalization ensures that differences between cells are not due to sequencing depth.
+
+
+## Identify highly variable genes (feature selection)
+
+Now that the data are scaled, this code below helps us identify the most highly variable genes across cells. This will help us cluster cells later on.
+
+```{r message=FALSE, warning=FALSE}
+pbmc <- FindVariableFeatures(pbmc, selection.method="vst",nfeatures = 2000)
+```
+
+
+## Scale the data
+
+We do this as a standard technique for preparing the data for clustering so each gene contributes equally to analysis. 
+
+```{r message=FALSE, warning=FALSE}
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+```
+
+
+## Perform linear dimensional reduction
+
+```{r message=FALSE, warning=FALSE}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc ))
+ElbowPlot(pbmc)
+```
+
+The elbow plot shows how much variation each principal component explains in the dataset. The curve begins to flatten after the early principal components, indicating diminishing returns from adding additional PCs.
+
+The values 5, 12, and 25 principal components were selected based on the elbow plot produced during PCA analysis. These values represent regions below, near, and beyond the elbow point, allowing comparison between lower-dimensional clustering, moderate-dimensional clustering, and higher-dimensional clustering that may begin to introduce noise.
+
+## Effect of changing number of principal components
+
+# 5 PCs
+```{r message=FALSE, warning=FALSE}
+pbmc_5 <- pbmc
+pbmc_5 <- FindNeighbors(pbmc_5, dims=1:5)
+pbmc_5 <- FindClusters(pbmc_5, resolution = 0.5)
+pbmc_5 <- RunUMAP(pbmc_5, dims = 1:5)
+```
+
+# 12 PCs
+```{r message=FALSE, warning=FALSE}
+pbmc_12 <- pbmc
+pbmc_12 <- FindNeighbors(pbmc_12, dims = 1:12)
+pbmc_12 <- FindClusters(pbmc_12, resolution = 0.5)
+pbmc_12 <- RunUMAP(pbmc_12, dims = 1:12)
+```
+
+# 25 PCs
+```{r message=FALSE, warning=FALSE}
+pbmc_25 <- pbmc
+pbmc_25 <- FindNeighbors(pbmc_25, dims = 1:25)
+pbmc_25 <- FindClusters(pbmc_25, resolution = 0.5)
+pbmc_25 <- RunUMAP(pbmc_25, dims = 1:25)
+```
+
+# DimPlots
+```{r fig.width=15, fig.height=5}
+p1 <- DimPlot(pbmc_5, reduction = "umap", label = T) + ggtitle("5 PCs")
+p2 <- DimPlot(pbmc_12, reduction = "umap", label = T) + ggtitle("12 PCs")
+p3 <- DimPlot(pbmc_25, reduction = "umap", label = T) + ggtitle("25 PCs")
+
+p1 + p2 + p3
+```
+
+The UMAP visualizations showed that increasing the number of principal components caused the clusters to become progressively more separated.
+
+Using 5 principal components produced larger and more connected clusters, with several groups appearing merged together. This suggests that lower-dimensional representations may not capture enough biological variation to fully distinguish all cell populations.
+
+Using 12 principal components increased separation between clusters and produced more clearly defined group boundaries. The clusters appeared more compact and distinct while still maintaining an organized overall structure. This suggests that additional biologically meaningful variation was captured at this intermediate PC setting.
+
+When 25 principal components were used, the clusters became even more split apart and fragmented. Several smaller isolated groups appeared throughout the UMAP space, and the overall clustering structure became more dispersed. While this higher-dimensional representation may capture finer subpopulation structure, some of the additional separation may also reflect noise or over-partitioning of biologically similar cells.
+
+Overall, the results suggest that increasing the number of principal components improves cluster resolution up to a point, after which excessive separation and fragmentation may reduce interpretability.
+
+## Comparing Cluster Counts
+
+```{r message=FALSE, warning=FALSE}
+length(unique(Idents(pbmc_5)))
+length(unique(Idents(pbmc_12)))
+length(unique(Idents(pbmc_25)))
+```
+
+The number of detected clusters increased as more principal components were included in the analysis, suggesting that higher-dimensional representations allowed the clustering algorithm to separate finer cellular subpopulations.
+
+## Comparing Cluster sizes across PC settings
+
+The following tables show the number of cells assigned to each cluster under different principal component settings. Comparing these cluster distributions helps reveal how increasing the number of PCs changes clustering granularity and cluster fragmentation.
+
+```{r message=FALSE, warning=FALSE}
+table(pbmc_5@meta.data$seurat_clusters)
+
+table(pbmc_12@meta.data$seurat_clusters)
+
+table(pbmc_25@meta.data$seurat_clusters)
+
+```
+
+The cluster distributions showed that increasing the number of principal components increased both the number of detected clusters and the presence of smaller subclusters. 
+
+Using 5 principal components produced 14 clusters that were generally larger and broader, suggesting that some biologically meaningful variation may not have been fully separated. Increasing to 12 principal components produced 19 clusters with clearer and more balanced separation between groups of cells. When 25 principal components were used, the clustering produced 22 clusters, including several very small clusters containing fewer than 100 cells.
+
+These results suggest that increasing the number of principal components allows the clustering algorithm to identify finer structure within the dataset. However, very high PC values may also introduce fragmentation and potential over-separation of biologically similar cells.
+
+***
+
+# Discussion
+
+The results showed that the number of principal components strongly influenced clustering behavior in the scRNA-seq dataset.
+
+The elbow plot suggested that the amount of variation explained by additional principal components began decreasing substantially after the early PCs. This provided a useful guide for selecting PC values to test.
+
+When clustering was performed using only 5 principal components, the clusters appeared broader and less separated. Some groups of cells appeared merged together, sugesting that lower-dimensional representations may not capture enough biological variation to fully distinguish cell populations.
+
+Using 12 principal components improved the clustering structure noticeably. The clusters became more clearly separated and more organized, suggesting that additional meaningful variation in the data was captured. This PC value appeared to provide a good balance between preserving biological information and maintaining interpretable cluster structure.
+
+However, when 25 principal components were used, the clustering became more fragmented. Several smaller isolated clusters appeared, and the overall structure became more complex. This suggests that increasing the number of PCs too far beyond the elbow point may begin to introduce noise or over-separate the data.
+
+Overall, the results demonstrate that princpal component selection is an important parameter in single-cell RNA sequencing workflows. Choosing too few PCs can oversimplify the data, while using too many may reduce interpetability by introducing unnecessary complexity.
+
+***
+
+# Conclusions
+
+This project showed that changing the number of principal components can noticeably affect clustering results in single-cell RNA sequencing data. Using too few principal components led to clusters that were less distinct, while using more helped reveal clearer groupings of cells.
+
+At the same time, increasing the number too much did not continue to improve the results. Instead, it made some clusters more fragmented, suggesting that additional principal components can introduce noise.
+
+Based on these results, using an intermediate number of principal components, such as 12 in this analysis, appeared to provide the best balance between capturing meaningful biological variation and maintaining interpretable clustering structure.
+
+Overall, the findings suggest that choosing the number of principal components is an important step that can influence how well the data can be understood.
